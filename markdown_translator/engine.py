@@ -582,6 +582,8 @@ def create_translation_engine(chunk_size: int = 500,
     
     # Create translator with API client, performance monitor, and security
     api_client = config_manager.get_api_client()
+    # Attach config manager to API client so translator can access it
+    api_client._config_manager = config_manager
     translator = TranslationPool(
         concurrency=concurrency,
         api_client=api_client,

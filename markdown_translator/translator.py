@@ -20,7 +20,7 @@ from .security import SecurityManager
 class RetryStrategy:
     """Configuration for retry behavior."""
     
-    def __init__(self, max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 60.0, 
+    def __init__(self, max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 300.0, 
                  exponential_base: float = 2.0, jitter: bool = True):
         """
         Initialize retry strategy.
@@ -34,7 +34,7 @@ class RetryStrategy:
         """
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.max_delay = max_delay
+        self.max_delay = max_delay  # Increased max delay to 300 seconds
         self.exponential_base = exponential_base
         self.jitter = jitter
     
@@ -91,7 +91,7 @@ class TranslationPool(ITranslator):
         self.concurrency = concurrency
         self.api_client = api_client
         self.validator = validator
-        self.retry_strategy = retry_strategy or RetryStrategy()
+        self.retry_strategy = retry_strategy or RetryStrategy(max_retries=5)  # Increase max retries to 5
         self.performance_monitor = performance_monitor
         self.security_manager = security_manager
         self.semaphore = asyncio.Semaphore(concurrency)
@@ -395,8 +395,11 @@ class TranslationPool(ITranslator):
             Exception: If API call fails
         """
         try:
+            # Get model name from config manager
+            model_name = self.api_client._config_manager.get_model_name()
+            
             response = self.api_client.chat.completions.create(
-                model="qwen/qwen-2.5-72b-instruct",  # Default model
+                model=model_name,
                 messages=[
                     {
                         "role": "user",
@@ -404,8 +407,8 @@ class TranslationPool(ITranslator):
                     }
                 ],
                 temperature=0.3,  # Lower temperature for more consistent translations
-                max_tokens=4000,  # Reasonable limit for chunk translations
-                timeout=30.0,  # 30 second timeout
+                max_tokens=8000,  # Increase max tokens to 8000 for larger content
+                timeout=120.0,  # Increase timeout to 120 seconds for slow models
             )
             
             return response.model_dump()

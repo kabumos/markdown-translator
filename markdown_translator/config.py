@@ -83,9 +83,9 @@ class ConfigManager(IConfigManager):
             if not api_url.startswith(('http://', 'https://')):
                 return False
             
-            # Validate API token format
+            # Validate API token is not empty
             token = self._config['TRANSLATE_API_TOKEN']
-            if not token.startswith('sk-or-v1-'):
+            if not token:
                 return False
             
             # Try to create a client to validate configuration

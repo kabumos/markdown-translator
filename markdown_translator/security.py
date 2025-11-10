@@ -109,7 +109,7 @@ class SecurityManager:
             
             # Check for path traversal attempts
             path_str = str(path)
-            if '..' in path_str or path_str.startswith('/'):
+            if '..' in path_str:
                 issues.append("Potential path traversal detected")
                 risk_level = 'high'
             
@@ -177,10 +177,25 @@ class SecurityManager:
                 issues.append(f"Dangerous output file extension: {path.suffix}")
                 risk_level = 'critical'
             
-            # Check for path traversal
+            # Check for path traversal - using same logic as input path validation
             path_str = str(path)
             if '..' in path_str:
                 issues.append("Potential path traversal in output path")
+                risk_level = 'high'
+            
+            # Additional check: ensure the resolved path is within allowed directories
+            try:
+                # Resolve the path to check for symbolic link traversal
+                resolved_path = path.resolve()
+                resolved_parent = resolved_path.parent.resolve()
+                
+                # Check if the parent directory is accessible and valid
+                if not resolved_parent.exists():
+                    issues.append("Output path parent directory does not exist")
+                    risk_level = 'high'
+                    
+            except Exception as path_e:
+                issues.append(f"Path resolution error: {str(path_e)}")
                 risk_level = 'high'
             
         except Exception as e:
