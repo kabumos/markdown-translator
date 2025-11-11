@@ -197,6 +197,11 @@ logging:
   file: "translator.log"
 ```
 
+使用配置文件:
+```bash
+markdown-translator -i input.md -o output.md --config-file translator_config.yaml
+```
+
 ### 2. 批量处理配置 Batch Processing Configuration
 
 #### 批量翻译脚本 Batch Translation Script
@@ -204,41 +209,38 @@ logging:
 #!/bin/bash
 # batch_translate.sh
 
-# 配置 Configuration
-API_TOKEN="your-api-key"
-MODEL="qwen/qwen-2.5-72b-instruct"
-CHUNK_SIZE=500
-CONCURRENCY=5
-INPUT_DIR="docs"
-OUTPUT_DIR="docs_zh"
+# 配置文件路径
+CONFIG_FILE="./configs/batch_config.yaml"
 
-# 设置环境 Setup environment
-export TRANSLATE_API_TOKEN="$API_TOKEN"
-export TRANSLATE_MODEL="$MODEL"
-
-# 创建输出目录 Create output directory
-mkdir -p "$OUTPUT_DIR"
-
-# 翻译所有Markdown文件 Translate all Markdown files
-find "$INPUT_DIR" -name "*.md" -type f | while read -r file; do
-    # 计算相对路径 Calculate relative path
-    rel_path="${file#$INPUT_DIR/}"
-    output_file="$OUTPUT_DIR/${rel_path%.*}_zh.md"
-    
-    # 创建输出目录结构 Create output directory structure
-    mkdir -p "$(dirname "$output_file")"
-    
-    echo "Translating: $file -> $output_file"
-    
-    # 执行翻译 Execute translation
-    if markdown-translator -i "$file" -o "$output_file" -c "$CHUNK_SIZE" -n "$CONCURRENCY"; then
-        echo "✅ Success: $file"
-    else
-        echo "❌ Failed: $file"
-    fi
+# 批量翻译多个文件
+for file in ./docs/*.md; do
+    echo "Translating $file..."
+    markdown-translator -i "$file" -o "${file%.md}_zh.md" --config-file "$CONFIG_FILE"
 done
+```
 
-echo "Batch translation completed!"
+对应的配置文件:
+```yaml
+# configs/batch_config.yaml
+api:
+  base_url: "https://openrouter.ai/api/v1"
+  token: "${TRANSLATE_API_TOKEN}"
+  model: "qwen/qwen-2.5-7b-instruct"  # 使用较快的模型进行批量处理
+  timeout: 60
+  max_retries: 3
+  retry_delay: 2
+  max_delay: 60
+
+translation:
+  default_chunk_size: 300
+  default_concurrency: 3
+
+validation:
+  enable_integrity_check: true
+  line_count_tolerance: 0.15
+
+performance:
+  enable_monitoring: false  # 批量处理时关闭监控以提升性能
 ```
 
 #### 并行批量处理 Parallel Batch Processing
@@ -253,16 +255,17 @@ export TRANSLATE_MODEL="qwen/qwen-2.5-72b-instruct"
 # 并行翻译函数 Parallel translation function
 translate_file() {
     local input_file="$1"
+    local config_file="$2"
     local output_file="${input_file%.*}_zh.md"
     
     echo "Processing: $input_file"
-    markdown-translator -i "$input_file" -o "$output_file" -c 400 -n 2
+    markdown-translator -i "$input_file" -o "$output_file" --config-file "$config_file"
 }
 
 export -f translate_file
 
 # 并行执行 Execute in parallel
-find docs -name "*.md" | parallel -j 4 translate_file {}
+find docs -name "*.md" | parallel -j 4 translate_file {} ./configs/batch_config.yaml
 ```
 
 ### 3. Docker 配置 Docker Configuration
@@ -504,5 +507,81 @@ markdown-translator -i file.md --verbose 2>&1 | tee debug.log
 # 只捕获错误 Capture only errors
 markdown-translator -i file.md 2> errors.log
 ```
+
+## 📁 配置文件 vs 环境变量 Configuration File vs Environment Variables
+
+### 何时使用配置文件 When to Use Configuration Files
+
+1. **复杂的配置需求**: 当你需要详细的配置选项时
+2. **多项目环境**: 在不同的项目中有不同的配置需求
+3. **团队协作**: 团队成员共享相同的配置
+4. **版本控制**: 配置作为代码纳入版本控制
+5. **批量处理**: 统一管理多个文件的翻译配置
+
+### 何时使用环境变量 When to Use Environment Variables
+
+1. **简单配置**: 只需要基本的API密钥和模型设置
+2. **安全性**: 敏感信息如API密钥不存储在文件中
+3. **快速测试**: 临时更改配置进行测试
+4. **CI/CD集成**: 在自动化流程中注入配置
+
+### 优先级 Priority
+
+配置的优先级如下（从高到低）:
+1. **命令行参数** - 最高优先级
+2. **环境变量** - 覆盖配置文件中的设置
+3. **配置文件** - 默认配置值
+4. **内置默认值** - 最低优先级
+
+例如，如果在配置文件中设置了模型为 `model_a`，但在环境变量中设置了 `TRANSLATE_MODEL=model_b`，则会使用 `model_b`。
+
+## ⚙️ 配置选项详解 Configuration Options Detailed
+
+### API 配置项 API Configuration
+
+| 选项 | 描述 | 默认值 |
+|------|------|--------|
+| `api.base_url` | API基础URL | `https://openrouter.ai/api/v1` |
+| `api.token` | API令牌 | 无默认值，必须提供 |
+| `api.model` | 使用的模型 | `qwen/qwen-2.5-72b-instruct` |
+| `api.timeout` | 请求超时时间(秒) | `120` |
+| `api.max_retries` | 最大重试次数 | `5` |
+| `api.retry_delay` | 初始重试延迟(秒) | `5` |
+| `api.max_delay` | 最大重试延迟(秒) | `300` |
+
+### 翻译配置项 Translation Configuration
+
+| 选项 | 描述 | 默认值 |
+|------|------|--------|
+| `translation.default_chunk_size` | 默认分块大小 | `500` |
+| `translation.default_concurrency` | 默认并发数 | `5` |
+| `translation.min_chunk_size` | 最小分块大小 | `50` |
+| `translation.max_chunk_size` | 最大分块大小 | `2000` |
+| `translation.max_concurrency` | 最大并发数 | `20` |
+| `translation.checkpoint_interval` | 检查点间隔 | `10` |
+
+### 验证配置项 Validation Configuration
+
+| 选项 | 描述 | 默认值 |
+|------|------|--------|
+| `validation.enable_integrity_check` | 是否启用完整性检查 | `true` |
+| `validation.line_count_tolerance` | 行数容忍度 | `0.1` |
+| `validation.enable_syntax_validation` | 是否启用语法验证 | `true` |
+
+### 性能配置项 Performance Configuration
+
+| 选项 | 描述 | 默认值 |
+|------|------|--------|
+| `performance.enable_monitoring` | 是否启用性能监控 | `true` |
+| `performance.memory_limit_mb` | 内存限制(MB) | `1024` |
+| `performance.temp_file_cleanup` | 是否清理临时文件 | `true` |
+
+### 日志配置项 Logging Configuration
+
+| 选项 | 描述 | 默认值 |
+|------|------|--------|
+| `logging.level` | 日志级别 | `INFO` |
+| `logging.format` | 日志格式 | `%(asctime)s - %(name)s - %(levelname)s - %(message)s` |
+| `logging.file` | 日志文件路径 | 无(只输出到控制台) |
 
 这些配置示例涵盖了各种使用场景和环境，帮助用户根据自己的需求选择最适合的配置。

@@ -15,6 +15,7 @@ A Python command-line tool for translating Markdown files to Chinese using OpenR
 - **📊 进度跟踪 Progress Tracking**: 实时进度显示和美观的控制台输出
 - **🔒 安全保护 Security**: 输入验证和路径安全检查
 - **📈 性能监控 Performance Monitoring**: 内存使用监控和性能优化
+- **⚙️ 配置灵活 Configuration Flexibility**: 支持环境变量和YAML配置文件
 
 ## 📦 安装 Installation
 
@@ -100,6 +101,7 @@ markdown-translator --resume checkpoint.json
 | `TRANSLATE_API_TOKEN` | ✅ | - | OpenRouter API密钥 |
 | `TRANSLATE_API` | ❌ | `https://openrouter.ai/api/v1` | API基础URL |
 | `TRANSLATE_MODEL` | ❌ | `qwen/qwen-2.5-72b-instruct` | 使用的翻译模型 |
+| `CONFIG_FILE` | ❌ | - | YAML配置文件路径 |
 
 ### 命令行参数 Command Line Options
 
@@ -112,10 +114,14 @@ markdown-translator --resume checkpoint.json
 | `--verbose` | `-v` | flag | false | 启用详细日志 |
 | `--dry-run` | - | flag | false | 干运行模式 |
 | `--resume` | - | string | - | 从检查点恢复 |
+| `--config-file` | - | string | - | YAML配置文件路径 |
+| `--timeout` | - | integer | 120 | API超时时间（秒） |
+| `--max-retries` | - | integer | 5 | API调用最大重试次数 |
+| `--retry-delay` | - | integer | 5 | 重试初始延迟（秒） |
+| `--max-delay` | - | integer | 300 | 重试最大延迟（秒） |
+| `--checkpoint-interval` | - | integer | 10 | 每N个分块保存一次检查点 |
 
 ## 📋 配置示例和最佳实践 Configuration Examples & Best Practices
-
-### 1. 环境变量配置文件 Environment Configuration File
 
 创建 `.env` 文件：Create a `.env` file:
 
@@ -128,6 +134,52 @@ TRANSLATE_API=https://openrouter.ai/api/v1
 # 可选：日志级别 Optional: Log level
 LOG_LEVEL=INFO
 ```
+
+### 2. YAML配置文件 YAML Configuration File
+
+创建 `translator_config.yaml` 文件以使用更丰富的配置选项：
+
+```yaml
+api:
+  base_url: "https://openrouter.ai/api/v1"
+  token: "${TRANSLATE_API_TOKEN}"  # 将使用环境变量 Use environment variable
+  model: "qwen/qwen-2.5-72b-instruct"
+  timeout: 120
+  max_retries: 5
+  retry_delay: 5
+  max_delay: 300
+
+translation:
+  default_chunk_size: 500
+  default_concurrency: 5
+  min_chunk_size: 50
+  max_chunk_size: 2000
+  max_concurrency: 20
+  checkpoint_interval: 10
+
+validation:
+  enable_integrity_check: true
+  line_count_tolerance: 0.1
+  enable_syntax_validation: true
+
+performance:
+  enable_monitoring: true
+  memory_limit_mb: 1024
+  temp_file_cleanup: true
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "translator.log"
+```
+
+当未指定 `--config-file` 时，工具会自动在以下位置查找配置文件：
+1. `./translator_config.yaml` (当前目录)
+2. `./config.yaml` (当前目录) 
+3. `~/.markdown-translator/config.yaml` (用户主目录)
+4. `/etc/markdown-translator/config.yaml` (系统范围)
+
+环境变量的优先级高于配置文件设置。
 
 然后加载环境变量：Then load environment variables:
 

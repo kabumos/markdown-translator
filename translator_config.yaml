@@ -1,0 +1,75 @@
+# Default Markdown Translator Configuration File
+# This is the default configuration file that will be used if no other configuration is specified
+
+# API Configuration
+api:
+  # API base URL - default is OpenRouter
+  base_url: "https://openrouter.ai/api/v1"
+  
+  # API Token - can reference environment variable
+  # Using ${VAR_NAME} syntax will load from environment
+  token: "${TRANSLATE_API_TOKEN}"
+  
+  # Model to use for translation
+  model: "qwen/qwen-2.5-72b-instruct"
+  
+  # API timeout in seconds
+  timeout: 120
+  
+  # Maximum number of retries
+  max_retries: 5
+  
+  # Initial delay between retries in seconds
+  retry_delay: 5
+  
+  # Maximum delay between retries in seconds
+  max_delay: 300
+
+# Translation settings
+translation:
+  # Default chunk size for splitting files
+  default_chunk_size: 500
+  
+  # Default concurrency level
+  default_concurrency: 5
+  
+  # Minimum and maximum allowed values
+  min_chunk_size: 50
+  max_chunk_size: 2000
+  max_concurrency: 20
+  
+  # Checkpoint interval - save every N chunks
+  checkpoint_interval: 10
+
+# Validation settings
+validation:
+  # Enable integrity checking
+  enable_integrity_check: true
+  
+  # Line count tolerance (10%)
+  line_count_tolerance: 0.1
+  
+  # Enable syntax validation
+  enable_syntax_validation: true
+
+# Performance settings
+performance:
+  # Enable performance monitoring
+  enable_monitoring: true
+  
+  # Memory limit in MB
+  memory_limit_mb: 1024
+  
+  # Cleanup temporary files after processing
+  temp_file_cleanup: true
+
+# Logging settings
+logging:
+  # Log level - DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  
+  # Log format
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # Log file path (optional)
+  file: "translator.log"

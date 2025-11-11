@@ -8,6 +8,7 @@ import os
 import sys
 import asyncio
 import signal
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,7 @@ from .config import ConfigManager
 from .engine import create_translation_engine
 from .logging_config import setup_logging
 from .security import SecurityManager, InputValidator
+from . import __version__
 
 
 console = Console()
@@ -108,74 +110,48 @@ def validate_concurrency(ctx, param, value):
     if not validation_result.is_valid:
         raise click.BadParameter(f"Concurrency validation failed: {', '.join(validation_result.issues)}")
     
-    if value > 20:
-        console.print(f"[yellow]Warning: High concurrency ({value}) may cause API rate limiting.[/yellow]")
+    if value < 1:
+        console.print("[yellow]Warning: Concurrency level less than 1 will be set to 1.[/yellow]")
+        return 1
+    
+    if value > 50:
+        console.print(f"[yellow]Warning: High concurrency level ({value}) may cause rate limiting.[/yellow]")
     
     return value
 
 
-def generate_default_output_path(input_path: str) -> str:
-    """Generate a default output path based on the input path."""
-    input_path_obj = Path(input_path)
-    stem = input_path_obj.stem
-    suffix = input_path_obj.suffix
-    parent = input_path_obj.parent
-    
-    # Add _zh suffix before the file extension
-    default_output = parent / f"{stem}_zh{suffix}"
-    return str(default_output)
-
-
 @click.command()
-@click.option(
-    '--input', '-i',
-    type=str,
-    required=True,
-    callback=validate_input_file,
-    help='Path to the input Markdown file to translate.'
-)
-@click.option(
-    '--output', '-o',
-    type=str,
-    callback=validate_output_file,
-    help='Path to the output translated file. If not specified, will use input filename with _zh suffix.'
-)
-@click.option(
-    '--chunk-size', '-c',
-    type=int,
-    default=None,
-    callback=validate_chunk_size,
-    help='Number of lines per chunk for translation. If not specified, optimizer will suggest optimal size.'
-)
-@click.option(
-    '--concurrency', '-n',
-    type=int,
-    default=None,
-    callback=validate_concurrency,
-    help='Number of concurrent translation requests. If not specified, optimizer will suggest optimal concurrency.'
-)
-@click.option(
-    '--verbose', '-v',
-    is_flag=True,
-    default=False,
-    help='Enable verbose logging output.'
-)
-@click.option(
-    '--dry-run',
-    is_flag=True,
-    default=False,
-    help='Show what would be done without actually translating.'
-)
-@click.option(
-    '--resume',
-    type=str,
-    help='Resume translation from checkpoint file.'
-)
-@click.version_option(version='1.0.0', prog_name='markdown-translator')
-def main(input: str, output: Optional[str], chunk_size: int, concurrency: int, 
-         verbose: bool, dry_run: bool, resume: Optional[str]):
+@click.option('-i', '--input', 'input_file', required=True, callback=validate_input_file,
+              help='Input Markdown file to translate')
+@click.option('-o', '--output', 'output_file', required=True, callback=validate_output_file,
+              help='Output file for translated content')
+@click.option('-c', '--chunk-size', type=int, callback=validate_chunk_size,
+              help='Chunk size for splitting (default: auto)')
+@click.option('-n', '--concurrency', type=int, callback=validate_concurrency,
+              help='Number of concurrent translation tasks (default: auto)')
+@click.option('--config-file', type=click.Path(exists=False), 
+              help='Path to YAML configuration file')
+@click.option('--timeout', type=int, default=120,
+              help='API timeout in seconds (default: 120)')
+@click.option('--max-retries', type=int, default=5,
+              help='Maximum number of retries for API calls (default: 5)')
+@click.option('--retry-delay', type=int, default=5,
+              help='Initial delay between retries in seconds (default: 5)')
+@click.option('--max-delay', type=int, default=300,
+              help='Maximum delay between retries in seconds (default: 300)')
+@click.option('--checkpoint-interval', type=int, default=10,
+              help='Save checkpoint every N chunks (default: 10)')
+@click.option('--resume', is_flag=True,
+              help='Resume from checkpoint if it exists')
+@click.option('--verbose', is_flag=True,
+              help='Enable verbose logging')
+@click.option('--version', is_flag=True,
+              help='Show version and exit')
+def main(input_file: str, output_file: Optional[str], chunk_size: Optional[int], concurrency: Optional[int],
+         config_file: Optional[str], timeout: int, max_retries: int, retry_delay: int,
+         max_delay: int, checkpoint_interval: int, resume: bool, verbose: bool, version: bool):
     """
-    Translate Markdown files to Chinese using AI translation services.
+    Translate Markdown files to Chinese using AI.
     
     This tool splits large Markdown files into chunks, translates them concurrently
     using OpenRouter API, and merges the results while preserving formatting.
@@ -186,8 +162,13 @@ def main(input: str, output: Optional[str], chunk_size: int, concurrency: int,
         
         markdown-translator -i docs.md --chunk-size 1000 --concurrency 10
         
-        markdown-translator --resume checkpoint.json
+        markdown-translator --config-file config.yaml --resume
     """
+    
+    # Handle version flag
+    if version:
+        console.print(f"Markdown Translator v{__version__}")
+        return
     
     # Setup signal handlers for graceful shutdown
     shutdown_event = asyncio.Event()
@@ -206,59 +187,74 @@ def main(input: str, output: Optional[str], chunk_size: int, concurrency: int,
         border_style="blue"
     ))
     
-    # Handle resume mode
-    if resume:
-        console.print(f"[blue]Resuming translation from checkpoint: {resume}[/blue]")
-        return asyncio.run(resume_translation(resume, verbose))
-    
     # Generate default output path if not provided
-    if output is None:
-        output = generate_default_output_path(input)
-        console.print(f"[dim]Using default output path: {output}[/dim]")
+    if output_file is None:
+        output_file = generate_default_output_path(input_file)
+        console.print(f"[dim]Using default output path: {output_file}[/dim]")
     
-    # Validate configuration
+    # Initialize configuration manager with optional config file
     try:
-        config_manager = ConfigManager()
+        config_manager = ConfigManager(config_file=config_file)
+        
+        # Validate API configuration
         if not config_manager.validate_api_config():
-            console.print("[red]Error: Invalid API configuration. Please check your environment variables.[/red]")
+            console.print("[red]Error: Invalid API configuration. Please check your API token and settings.[/red]")
             console.print("\nRequired environment variables:")
             console.print("  TRANSLATE_API_TOKEN - Your OpenRouter API token")
             console.print("\nOptional environment variables:")
             console.print("  TRANSLATE_API - API base URL (default: https://openrouter.ai/api/v1)")
             console.print("  TRANSLATE_MODEL - Model to use (default: qwen/qwen-2.5-72b-instruct)")
             sys.exit(1)
-    except ValueError as e:
-        console.print(f"[red]Configuration error: {e}[/red]")
-        sys.exit(1)
-    
-    # Display configuration summary
-    if verbose or dry_run:
-        console.print("\n[bold]Configuration:[/bold]")
-        console.print(f"  Input file: {input}")
-        console.print(f"  Output file: {output}")
-        console.print(f"  Chunk size: {chunk_size if chunk_size is not None else 'auto (optimizer will decide)'}")
-        console.print(f"  Concurrency: {concurrency if concurrency is not None else 'auto (optimizer will decide)'}")
-        console.print(f"  Model: {config_manager.get_model_name()}")
-        console.print(f"  API URL: {config_manager.get_api_base_url()}")
-        console.print(f"  Verbose: {verbose}")
-    
-    if dry_run:
-        console.print("\n[yellow]Dry run mode - no actual translation will be performed.[/yellow]")
-        return
-    
-    # Run the translation
-    return asyncio.run(run_translation(
-        input_file=input,
-        output_file=output,
-        chunk_size=chunk_size,
-        concurrency=concurrency,
-        verbose=verbose,
-        shutdown_event=shutdown_event
-    ))
+            
+        # Display configuration summary
+        if verbose:
+            console.print("\n[bold]Configuration:[/bold]")
+            console.print(f"  Input file: {input_file}")
+            console.print(f"  Output file: {output_file}")
+            console.print(f"  Config file: {config_file if config_file else 'None (using defaults)'}")
+            console.print(f"  Chunk size: {chunk_size if chunk_size is not None else 'auto (optimizer will decide)'}")
+            console.print(f"  Concurrency: {concurrency if concurrency is not None else 'auto (optimizer will decide)'}")
+            console.print(f"  Model: {config_manager.get_model_name()}")
+            console.print(f"  API URL: {config_manager.get_api_base_url()}")
+            console.print(f"  Timeout: {timeout}s")
+            console.print(f"  Max retries: {max_retries}")
+            console.print(f"  Retry delay: {retry_delay}s")
+            console.print(f"  Max delay: {max_delay}s")
+            console.print(f"  Checkpoint interval: {checkpoint_interval} chunks")
+            console.print(f"  Resume: {resume}")
+            console.print(f"  Verbose: {verbose}")
+        
+        # Handle resume mode
+        if resume:
+            # Look for checkpoint file based on output file
+            checkpoint_path = Path(output_file).with_suffix('.chkpt.json')
+            if checkpoint_path.exists():
+                console.print(f"[blue]Resuming translation from checkpoint: {checkpoint_path}[/blue]")
+                return asyncio.run(resume_translation(str(checkpoint_path), verbose))
+            else:
+                console.print(f"[yellow]Checkpoint file not found: {checkpoint_path}. Starting new translation.[/yellow]")
+        
+        # Run the translation
+        return asyncio.run(run_translation(
+            input_file=input_file,
+            output_file=output_file,
+            chunk_size=chunk_size,
+            concurrency=concurrency,
+            timeout=timeout,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            max_delay=max_delay,
+            checkpoint_interval=checkpoint_interval,
+            verbose=verbose,
+            shutdown_event=shutdown_event,
+            config_manager=config_manager
+        ))
 
 
 async def run_translation(input_file: str, output_file: str, chunk_size: int, 
-                         concurrency: int, verbose: bool, shutdown_event: asyncio.Event):
+                         concurrency: int, timeout: int, max_retries: int, 
+                         retry_delay: int, max_delay: int, checkpoint_interval: int,
+                         verbose: bool, shutdown_event: asyncio.Event, config_manager: ConfigManager):
     """
     Run the main translation process.
     
@@ -267,8 +263,14 @@ async def run_translation(input_file: str, output_file: str, chunk_size: int,
         output_file: Path to output file
         chunk_size: Chunk size for splitting
         concurrency: Concurrency level
+        timeout: API timeout in seconds
+        max_retries: Maximum number of retries for API calls
+        retry_delay: Initial delay between retries in seconds
+        max_delay: Maximum delay between retries in seconds
+        checkpoint_interval: Save checkpoint every N chunks
         verbose: Enable verbose logging
         shutdown_event: Event for graceful shutdown
+        config_manager: Configuration manager instance
     """
     try:
         # Setup logging
@@ -372,7 +374,8 @@ async def resume_translation(checkpoint_path: str, verbose: bool):
     """
     try:
         # Setup logging
-        logger = setup_logging(verbose=verbose)
+        log_level = "DEBUG" if verbose else "INFO"
+        logger = setup_logging(log_level)
         
         # Create translation engine
         console.print("[blue]Initializing translation engine...[/blue]")
@@ -382,15 +385,41 @@ async def resume_translation(checkpoint_path: str, verbose: bool):
         console.print(f"[blue]Resuming translation from {checkpoint_path}...[/blue]")
         stats = await engine.resume_translation(checkpoint_path)
         
-        # Display results (same as above)
-        console.print(f"\n[bold green]Translation resumed and completed![/bold green]")
-        # ... (same result display logic)
+        # Display results
+        console.print(f"\n[bold green]Translation resumed and completed successfully![/bold green]")
+        console.print(f"[green]Output file: {stats.output_path}[/green]")
+        console.print(f"\n[bold]Statistics:[/bold]")
+        console.print(f"  Total chunks: {stats.total_chunks}")
+        console.print(f"  Successful: {stats.successful_translations}")
+        console.print(f"  Failed: {stats.failed_translations}")
+        console.print(f"  Success rate: {stats.success_rate:.1f}%")
+        console.print(f"  Total time: {stats.total_processing_time:.2f}s")
+        console.print(f"  Average per chunk: {stats.average_chunk_time:.2f}s")
+        console.print(f"  Total lines: {stats.total_lines}")
+        console.print(f"  API calls: {stats.api_calls_made}")
+        console.print(f"  Retries: {stats.total_retries}")
+        
+        if stats.failed_translations > 0:
+            console.print(f"\n[yellow]Warning: {stats.failed_translations} chunks failed to translate.[/yellow]")
+            console.print("[yellow]Check the output file for any untranslated sections.[/yellow]")
+            return 1
         
         return 0
         
+    except FileNotFoundError:
+        console.print(f"[red]Checkpoint file not found: {checkpoint_path}[/red]")
+        return 1
+    except json.JSONDecodeError:
+        console.print(f"[red]Invalid checkpoint file format: {checkpoint_path}[/red]")
+        return 1
     except NotImplementedError:
         console.print("[yellow]Resume functionality is not yet implemented.[/yellow]")
         return 1
+    except AttributeError as e:
+        if "resume_translation" in str(e):
+            console.print("[yellow]Resume functionality is not yet implemented.[/yellow]")
+            return 1
+        raise
     except Exception as e:
         console.print(f"\n[red]Resume failed: {e}[/red]")
         if verbose:

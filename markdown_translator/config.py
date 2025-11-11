@@ -8,6 +8,7 @@ and provides access to API clients and other configuration values.
 import os
 from typing import Dict, Any, Optional
 from openai import OpenAI
+import yaml
 from .interfaces import IConfigManager
 
 
@@ -17,9 +18,18 @@ class ConfigManager(IConfigManager):
     
     This class implements the IConfigManager interface and provides methods to:
     - Load and validate environment variables
+    - Load and validate configuration files
     - Create configured OpenAI clients
     - Validate API configuration
     """
+    
+    # Default configuration file paths to check
+    DEFAULT_CONFIG_FILES = [
+        './translator_config.yaml',
+        './config.yaml',
+        '~/.markdown-translator/config.yaml',
+        '/etc/markdown-translator/config.yaml'
+    ]
     
     # Required environment variables
     REQUIRED_ENV_VARS = {
@@ -29,16 +39,73 @@ class ConfigManager(IConfigManager):
     # Optional environment variables with defaults
     OPTIONAL_ENV_VARS = {
         'TRANSLATE_API': 'https://openrouter.ai/api/v1',
-        'TRANSLATE_MODEL': 'qwen/qwen-2.5-72b-instruct'
+        'TRANSLATE_MODEL': 'qwen/qwen-2.5-72b-instruct',
+        'CONFIG_FILE': None  # Path to YAML configuration file
     }
     
-    def __init__(self):
+    def __init__(self, config_file: Optional[str] = None):
         """Initialize the configuration manager."""
         self._config: Dict[str, Any] = {}
         self._api_client: Optional[OpenAI] = None
+        self.config_file = config_file
         self._load_config()
     
+    def _find_default_config_file(self) -> Optional[str]:
+        """Find default configuration file if exists."""
+        for config_path in self.DEFAULT_CONFIG_FILES:
+            # Expand user home directory
+            expanded_path = os.path.expanduser(config_path)
+            if os.path.exists(expanded_path):
+                return expanded_path
+        return None
+    
     def _load_config(self) -> None:
+        """Load configuration from file and environment variables."""
+        # First, try to load from explicitly specified config file
+        config_file_path = self.config_file or os.getenv('CONFIG_FILE')
+        
+        # If no explicit config file, look for default config files
+        if not config_file_path:
+            config_file_path = self._find_default_config_file()
+        
+        # Load from config file if found
+        if config_file_path and os.path.exists(config_file_path):
+            self._load_from_file(config_file_path)
+        else:
+            # Fall back to environment variables only
+            self._load_from_env()
+    
+    def _load_from_file(self, config_file_path: str) -> None:
+        """Load configuration from YAML file."""
+        with open(config_file_path, 'r', encoding='utf-8') as f:
+            file_config = yaml.safe_load(f)
+        
+        # Extract API configuration from file
+        if file_config and 'api' in file_config:
+            api_config = file_config['api']
+            self._config['TRANSLATE_API'] = api_config.get('base_url', self.OPTIONAL_ENV_VARS['TRANSLATE_API'])
+            self._config['TRANSLATE_MODEL'] = api_config.get('model', self.OPTIONAL_ENV_VARS['TRANSLATE_MODEL'])
+            
+            # Handle token from file or fall back to environment variable
+            if 'token' in api_config:
+                token = api_config['token']
+                # Allow environment variable substitution in token
+                if isinstance(token, str) and token.startswith('${') and token.endswith('}'):
+                    env_var_name = token[2:-1]
+                    token = os.getenv(env_var_name)
+                self._config['TRANSLATE_API_TOKEN'] = token
+            else:
+                # Fall back to environment variable for token
+                self._config['TRANSLATE_API_TOKEN'] = os.getenv('TRANSLATE_API_TOKEN')
+        else:
+            # If no API config in file, load from environment variables
+            self._load_from_env()
+            return
+        
+        # Override with any environment variables that are set
+        self._override_with_env()
+    
+    def _load_from_env(self) -> None:
         """Load configuration from environment variables."""
         # Load required environment variables
         for env_var, description in self.REQUIRED_ENV_VARS.items():
@@ -50,6 +117,14 @@ class ConfigManager(IConfigManager):
         # Load optional environment variables with defaults
         for env_var, default_value in self.OPTIONAL_ENV_VARS.items():
             self._config[env_var] = os.getenv(env_var, default_value)
+    
+    def _override_with_env(self) -> None:
+        """Override file configuration with environment variables if set."""
+        # Override with environment variables if they are set
+        for env_var in list(self.REQUIRED_ENV_VARS.keys()) + list(self.OPTIONAL_ENV_VARS.keys()):
+            env_value = os.getenv(env_var)
+            if env_value is not None:
+                self._config[env_var] = env_value
     
     def load_environment_variables(self) -> Dict[str, str]:
         """
